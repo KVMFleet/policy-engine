@@ -7,6 +7,7 @@ The dispatcher in evaluator.py routes to the right module by
 """
 from kvmfleet_policy_engine.rules import (
     approval_required,
+    ip_allowlist,
     max_concurrent_sessions,
     require_mfa,
     time_of_day,
@@ -14,6 +15,7 @@ from kvmfleet_policy_engine.rules import (
 
 __all__ = [
     "approval_required",
+    "ip_allowlist",
     "max_concurrent_sessions",
     "require_mfa",
     "time_of_day",

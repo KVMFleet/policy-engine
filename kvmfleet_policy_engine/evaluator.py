@@ -20,6 +20,7 @@ from typing import Any
 
 from kvmfleet_policy_engine.rules import (
     approval_required,
+    ip_allowlist,
     max_concurrent_sessions,
     require_mfa,
     time_of_day,
@@ -31,7 +32,14 @@ _RULE_DISPATCH: dict[str, Callable[[dict[str, Any], EvalContext], str | None]] =
     "require_mfa": require_mfa.apply,
     "max_concurrent_sessions": max_concurrent_sessions.apply,
     "approval_required": approval_required.apply,
+    "ip_allowlist": ip_allowlist.apply,
 }
+
+# Modes recognised by the evaluator. Anything else collapses to "block"
+# (fail-closed). dry_run is a strict subset of warn — the rule is detected
+# and reasoning surfaced but the result.decision is "observe" so callers
+# treat it as informational.
+_VALID_MODES = ("block", "warn", "dry_run")
 
 _ALLOW = EvaluationResult(decision="allow")
 
@@ -41,9 +49,11 @@ def evaluate(policies: list[Policy], context: EvalContext) -> EvaluationResult:
     wants (database, JSON file, in-memory list) and builds `context`
     from its own data model.
 
-    Returns the first deny, otherwise the first warn, otherwise allow.
+    Returns the first deny; otherwise the first warn; otherwise the
+    first observe (dry_run); otherwise allow.
     """
     first_warn: EvaluationResult | None = None
+    first_observe: EvaluationResult | None = None
     for p in policies:
         fn = _RULE_DISPATCH.get(p.rule_type)
         if fn is None:
@@ -56,7 +66,7 @@ def evaluate(policies: list[Policy], context: EvalContext) -> EvaluationResult:
             continue
         # Rule fired. Resolve enforce_mode (block by default for any
         # unknown value — fail-closed).
-        mode = p.enforce_mode if p.enforce_mode in ("block", "warn") else "block"
+        mode = p.enforce_mode if p.enforce_mode in _VALID_MODES else "block"
         if mode == "block":
             return EvaluationResult(
                 decision="deny",
@@ -64,13 +74,24 @@ def evaluate(policies: list[Policy], context: EvalContext) -> EvaluationResult:
                 policy_id=p.id,
                 policy_name=p.name,
             )
-        # warn mode — record the first warn but keep scanning for a block.
-        if first_warn is None:
-            first_warn = EvaluationResult(
-                decision="warn",
+        if mode == "warn":
+            if first_warn is None:
+                first_warn = EvaluationResult(
+                    decision="warn",
+                    reason=reason,
+                    policy_id=p.id,
+                    policy_name=p.name,
+                )
+            continue
+        # dry_run — log the would-have-fired signal but don't block or warn.
+        # Lets admins roll out a new rule, observe its fire-pattern for a
+        # week, then promote to warn/block before any user is impacted.
+        if first_observe is None:
+            first_observe = EvaluationResult(
+                decision="observe",
                 reason=reason,
                 policy_id=p.id,
                 policy_name=p.name,
             )
 
-    return first_warn or _ALLOW
+    return first_warn or first_observe or _ALLOW

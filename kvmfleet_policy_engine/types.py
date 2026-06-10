@@ -59,6 +59,8 @@ class EvalContext:
       has_active_grant: whether the requesting user has an active /
         non-expired access grant for the target device. Required for
         `approval_required` rules.
+      request_ip: source IP of the request (caller-observed). Required
+        for `ip_allowlist` rules.
 
     The rule-fires-when-context-missing-is-None semantics are
     documented per rule in `rules/*.py`. The default is "skip the
@@ -71,6 +73,7 @@ class EvalContext:
     user_totp_enabled: bool | None = None
     open_session_count: int | None = None
     has_active_grant: bool | None = None
+    request_ip: str | None = None
 
 
 @dataclass
@@ -78,10 +81,14 @@ class EvaluationResult:
     """Result of evaluating a context against a list of policies.
 
     Attributes:
-      decision: `"allow"`, `"deny"`, or `"warn"`.
+      decision: `"allow"`, `"deny"`, `"warn"`, or `"observe"`.
       reason: human-readable explanation; empty when allow.
       policy_id: id of the policy that fired (None when allow).
       policy_name: name of the policy that fired (empty when allow).
+
+    `"observe"` indicates a rule in `dry_run` enforce mode fired. The
+    caller should not block, but should log the evaluation (an admin
+    rolled the rule out as observe-only before promoting to warn/block).
     """
     decision: str
     reason: str = ""
@@ -99,3 +106,7 @@ class EvaluationResult:
     @property
     def warned(self) -> bool:
         return self.decision == "warn"
+
+    @property
+    def observed(self) -> bool:
+        return self.decision == "observe"
