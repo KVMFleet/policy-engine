@@ -12,9 +12,18 @@ library versions are still in production.
 Unknown `enforce_mode` values default to `"block"` (fail-closed) on the
 grounds that mis-configured policies should err toward refusing access,
 not granting it.
+
+By the same principle, a rule that RAISES (unexpected input its own
+graceful-skip handling didn't anticipate) is treated as a `block` →
+`deny`, not silently skipped and not allowed to propagate. A restrictive
+rule we cannot evaluate must fail closed: denying access is recoverable
+(the admin notices and fixes the policy), silently granting it is a
+breach. This makes the security property explicit in the engine rather
+than relying on the caller turning an unhandled exception into a 500.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -26,6 +35,8 @@ from kvmfleet_policy_engine.rules import (
     time_of_day,
 )
 from kvmfleet_policy_engine.types import EvalContext, EvaluationResult, Policy
+
+log = logging.getLogger(__name__)
 
 _RULE_DISPATCH: dict[str, Callable[[dict[str, Any], EvalContext], str | None]] = {
     "time_of_day": time_of_day.apply,
@@ -61,12 +72,35 @@ def evaluate(policies: list[Policy], context: EvalContext) -> EvaluationResult:
             # affordance: a newer rule_type can land in the policy store
             # before every consumer has been upgraded.
             continue
-        reason = fn(p.rule_data, context)
+        # Resolve enforce_mode up front (block by default for any unknown
+        # value — fail-closed) so we know how to handle a rule that raises.
+        mode = p.enforce_mode if p.enforce_mode in _VALID_MODES else "block"
+        try:
+            reason = fn(p.rule_data, context)
+        except Exception:
+            log.exception(
+                "policy rule %r (policy_id=%s, mode=%s) raised during "
+                "evaluation", p.rule_type, p.id, mode,
+            )
+            if mode == "block":
+                # A BLOCKING rule we cannot evaluate must fail closed: denying
+                # is recoverable, silently granting is a breach.
+                return EvaluationResult(
+                    decision="deny",
+                    reason=(
+                        "This action is governed by a policy that could not be "
+                        "evaluated. Access is denied (fail-closed). Contact an "
+                        "administrator to review the policy configuration."
+                    ),
+                    policy_id=p.id,
+                    policy_name=p.name,
+                )
+            # warn / dry_run never deny access by design, so a rule error here
+            # cannot cause a breach — surface it as that mode's non-blocking
+            # signal so the unreliable evaluation is still visible.
+            reason = "policy rule could not be evaluated (see server logs)"
         if reason is None:
             continue
-        # Rule fired. Resolve enforce_mode (block by default for any
-        # unknown value — fail-closed).
-        mode = p.enforce_mode if p.enforce_mode in _VALID_MODES else "block"
         if mode == "block":
             return EvaluationResult(
                 decision="deny",

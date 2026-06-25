@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kvmfleet-policy-engine"
-version = "0.2.0"
+version = "0.2.1"
 description = "Small opinionated policy engine for access control over hardware-shaped resources (BMCs, network gear, similar). Four rule types: time-of-day windows, require-MFA, max-concurrent-sessions, approval-required. Pure functions; no DB; no async. Powers KVM Fleet's hosted access-governance platform."
 readme = "README.md"
 license = { file = "LICENSE" }

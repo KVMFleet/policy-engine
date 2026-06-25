@@ -48,7 +48,7 @@ def apply(rule_data: dict[str, Any], context: EvalContext) -> str | None:
         # shouldn't crash because of a bad request-IP string.
         return None
 
-    networks: list[ipaddress._BaseNetwork] = []
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for c in cidrs_raw:
         try:
             networks.append(ipaddress.ip_network(c, strict=False))

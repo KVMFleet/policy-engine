@@ -330,3 +330,51 @@ def test_evaluation_result_helpers(
     assert r.allowed is allowed
     assert r.denied is denied
     assert r.warned is warned
+
+
+# --- fail-closed when a rule RAISES (security-critical) ------------------
+
+def _boom(rule_data, context):  # type: ignore[no-untyped-def]
+    raise RuntimeError("simulated rule bug / unexpected input")
+
+
+def test_block_rule_that_raises_fails_closed_to_deny(monkeypatch) -> None:
+    """A BLOCKING rule we cannot evaluate must DENY, not propagate, not allow.
+    Denying is recoverable; silently granting on an unevaluable restrictive
+    policy is a breach."""
+    from kvmfleet_policy_engine import evaluator
+    monkeypatch.setitem(evaluator._RULE_DISPATCH, "time_of_day", _boom)
+    res = evaluate([make_policy("time_of_day", enforce_mode="block")],
+                   EvalContext(action="console.start"))
+    assert res.decision == "deny"
+    assert res.policy_id == "p-1"
+
+
+def test_warn_rule_that_raises_does_not_deny(monkeypatch) -> None:
+    """warn never blocks access by design — a rule error there can't cause a
+    breach, so it must NOT escalate to deny. It surfaces as a warn."""
+    from kvmfleet_policy_engine import evaluator
+    monkeypatch.setitem(evaluator._RULE_DISPATCH, "time_of_day", _boom)
+    res = evaluate([make_policy("time_of_day", enforce_mode="warn")],
+                   EvalContext(action="console.start"))
+    assert res.decision == "warn"
+
+
+def test_dry_run_rule_that_raises_never_impacts_access(monkeypatch) -> None:
+    """observe/dry_run must never block — a rule error stays informational."""
+    from kvmfleet_policy_engine import evaluator
+    monkeypatch.setitem(evaluator._RULE_DISPATCH, "time_of_day", _boom)
+    res = evaluate([make_policy("time_of_day", enforce_mode="dry_run")],
+                   EvalContext(action="console.start"))
+    assert res.decision == "observe"
+
+
+def test_a_raising_rule_never_propagates(monkeypatch) -> None:
+    """evaluate() must never let a rule exception escape to the caller —
+    the security property must be the engine's, not the caller's 500 handler."""
+    from kvmfleet_policy_engine import evaluator
+    monkeypatch.setitem(evaluator._RULE_DISPATCH, "require_mfa", _boom)
+    # Should not raise:
+    res = evaluate([make_policy("require_mfa", enforce_mode="block")],
+                   EvalContext(action="console.start"))
+    assert res.decision == "deny"

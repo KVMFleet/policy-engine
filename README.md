@@ -10,7 +10,7 @@ Powers the hosted access-governance platform at
 
 ## What this is
 
-Four rule types, each with `block` and `warn` enforcement modes:
+Five rule types, each with `block`, `warn`, or `dry_run` (observe-only) enforcement modes:
 
 | Rule | Fires when |
 |---|---|
@@ -18,6 +18,7 @@ Four rule types, each with `block` and `warn` enforcement modes:
 | `require_mfa` | The user does not have 2FA enabled |
 | `max_concurrent_sessions` | The user already has ≥ N privileged sessions open |
 | `approval_required` | The user has no active access grant for the device |
+| `ip_allowlist` | The request's source IP is outside the allow-listed CIDR ranges |
 
 Each rule supports two common filters: `target_tags` (rule applies
 only when device has all of these tags) and `target_actions` (rule
@@ -26,7 +27,7 @@ device / action" when empty.
 
 ## What this is NOT
 
-- Not a general-purpose policy engine. We deliberately stop at four
+- Not a general-purpose policy engine. We deliberately stop at five
   rule types — the ones that 80% of access-governance setups for
   hardware actually need. If you need ABAC over arbitrary
   attributes, use [Cedar](https://www.cedarpolicy.com/) or
@@ -148,17 +149,45 @@ Provide `EvalContext.has_active_grant`. Rule fires when False. The
 caller defines what "active grant" means in its own data model —
 the library only needs a boolean.
 
+### `ip_allowlist`
+
+```python
+rule_data = {
+    "cidrs": ["10.0.0.0/8", "192.168.0.0/16", "203.0.113.5/32"],
+    "target_tags": [...], "target_actions": [...]
+}
+```
+
+Provide `EvalContext.request_ip`. Rule fires when the source IP is outside
+every allow-listed CIDR. It SKIPS (rather than locking everyone out) when
+`request_ip` is unset or `cidrs` is empty/malformed — a typo in the allowlist
+shouldn't become an outage. This is the procurement-checklist answer for "only
+corporate / VPN IP ranges can reach the management plane."
+
 ## Outcome semantics
 
 `evaluate()` walks the policy list in order:
 
 1. **First matching `block` rule wins.** Return `deny`.
 2. **Otherwise, first matching `warn` rule wins.** Return `warn`.
-3. **Otherwise**, return `allow`.
+3. **Otherwise, first matching `dry_run` rule wins.** Return `observe` — the
+   rule fired and its reasoning is surfaced, but the decision neither blocks
+   nor warns. Lets admins roll a new rule out in observe-only mode and watch
+   its fire-pattern before promoting it to `warn` or `block`.
+4. **Otherwise**, return `allow`.
 
 Unknown `rule_type` values are silently skipped — forward-compat for
 rolling out a new rule type while older library versions are still
 running. Unknown `enforce_mode` values default to `block` (fail-closed).
+
+**Fail-closed on an unevaluable rule.** A rule that *raises* (unexpected
+input its own graceful-skip handling didn't anticipate) never propagates
+out of `evaluate()`. A `block`-mode rule that can't be evaluated returns
+`deny` — a restrictive policy we can't confirm is satisfied must fail
+closed (denying is recoverable; silently granting is a breach). `warn` /
+`dry_run` modes never deny by design, so a rule error there degrades to
+that mode's non-blocking signal. The security property lives in the engine,
+not in the caller's error handling.
 
 ## Why does this exist
 
@@ -170,7 +199,7 @@ lot for "should this console session start at 3 AM?") or too generic
 
 By being narrow + opinionated, we ship a policy engine you can
 embed in a Friday and stop thinking about. If your needs grow
-beyond the four rule types, you'll outgrow us — and you should,
+beyond the five rule types, you'll outgrow us — and you should,
 because that's a sign your access model has gotten richer.
 
 Open-sourcing because:
@@ -199,7 +228,7 @@ See [BUSINESS.md §N](https://github.com/kvmfleet) for the doctrine.
 ## Contributing
 
 Bug reports and patches welcome. PRs that add new rule types must
-make a case for why the existing four don't cover the use case. We'd
+make a case for why the existing five don't cover the use case. We'd
 rather stay opinionated and small.
 
 See [docs/contributing.md](docs/contributing.md) for the local dev
